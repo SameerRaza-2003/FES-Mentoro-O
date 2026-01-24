@@ -55,6 +55,59 @@ app.add_middleware(
 # 🧠 Embeddings cache
 # ---------------------------------
 EMBED_CACHE = {}
+# ---------------------------------
+# 🎓 University Tiers (FINAL – SOURCE OF TRUTH)
+# ---------------------------------
+
+TIERS = {
+    1: [
+        ("Edinburgh Napier University", "£17,500 – £21,500"),
+        ("University of Portsmouth", "£16,200 – £19,200"),
+        ("University of South Wales", "£13,700 – £18,000"),
+        ("University of East Anglia", "£13,700 – £18,000"),
+        ("University of Dundee", "£13,700 – £18,000"),
+        ("Robert Gordon University", "£13,700 – £18,000"),
+        ("Manchester Metropolitan University (MMU)", "£13,700 – £18,000"),
+        ("Liverpool John Moores University", "£13,700 – £18,000"),
+        ("University of Stirling", "£13,700 – £18,000"),
+        ("Anglia Ruskin University", "£13,700 – £18,000"),
+        ("University of Essex", "£13,700 – £18,000"),
+        ("University of Northampton", "£13,700 – £18,000"),
+        ("Nottingham Trent University", "£13,700 – £18,000"),
+    ],
+
+    2: [
+        ("Sheffield Hallam University (SHU)", "£16,385 / £18,820"),
+        ("University of Westminster", "£17,000"),
+        ("Ulster University", "£13,800 (Birmingham & Manchester), £15,450 (London)"),
+        ("SRUC – Scotland’s Rural College", "£19,000"),
+        ("Prifysgol Aberystwyth University", "£19,700 / £21,000"),
+        ("Regent College London", "£15,950"),
+        ("Middlesex University London", "£19,200"),
+        ("Heriot-Watt University", "£19,456"),
+        ("University of Hull (Main Campus)", "£16,000"),
+        ("De Montfort University (DMU)", "£17,950"),
+        ("University of Bradford", "£20,000 – £22,000"),
+    ],
+
+    3: [
+        ("Kingston University London", "£16,600"),
+        ("Birmingham City University (BCU)", "£18,600"),
+        ("Swansea University", "£22,750"),
+        ("Wrexham Glyndwr University", "£12,500"),
+        ("Bath Spa University", "£15,905"),
+        ("Cardiff Metropolitan University", "£17,600"),
+    ],
+}
+def detect_tier_query(query: str):
+    q = query.lower()
+    if "tier 1" in q:
+        return 1
+    if "tier 2" in q:
+        return 2
+    if "tier 3" in q:
+        return 3
+    return None
 
 def embed_query(query: str):
     if query in EMBED_CACHE:
@@ -277,6 +330,30 @@ def chat(req: ChatRequest):
     """Non-streaming JSON endpoint (useful for debugging)."""
     try:
         start = time.time()
+
+        # -------------------------------
+        # 🎯 TIER SHORT-CIRCUIT (FIRST)
+        # -------------------------------
+        tier = detect_tier_query(req.query)
+        if tier:
+            lines = []
+            for uni, fee in TIERS[tier]:
+                if fee:
+                    lines.append(f"• **{uni}** — {fee}")
+                else:
+                    lines.append(f"• **{uni}**")
+
+            return {
+                "response": (
+                    f"🎓 **Tier {tier} Universities (FES Partner Universities – UK)**\n\n"
+                    + "\n".join(lines)
+                    + "\n\n👉 *FES can assist with offers, scholarships & visa processing.*"
+                )
+            }
+
+        # -------------------------------
+        # 🔍 NORMAL RAG FLOW (UNCHANGED)
+        # -------------------------------
         matches = run_rag(req.query, top_k=3)
         if not matches:
             return {"response": "No relevant info found."}
@@ -285,15 +362,24 @@ def chat(req: ChatRequest):
             fast = fast_contact_response(matches, req.query)
             if fast:
                 elapsed = time.time() - start
-                return {"response": f"{fast}[Retrieved {len(matches)} chunks | Response time: {elapsed:.2f}s]"}
+                return {
+                    "response": f"{fast}[Retrieved {len(matches)} chunks | Response time: {elapsed:.2f}s]"
+                }
 
         context = build_context(matches)
         answer = generate_answer(req.query, context)
         elapsed = time.time() - start
-        return {"response": f"{answer}\n\n[Retrieved {len(matches)} chunks | Response time: {elapsed:.2f}s]"}
+
+        return {
+            "response": f"{answer}\n\n[Retrieved {len(matches)} chunks | Response time: {elapsed:.2f}s]"
+        }
+
     except Exception as e:
         logging.exception("Error in /chat")
-        return JSONResponse(status_code=500, content={"error": f"Failed to process query: {str(e)}"})
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to process query: {str(e)}"}
+        )
 
 @app.get("/stream")
 async def stream(q: str):
@@ -303,7 +389,33 @@ async def stream(q: str):
     async def event_generator():
         start = time.time()
         try:
-            # 1) RAG retrieval first (fast, synchronous)
+            # -------------------------------
+            # 🎯 TIER SHORT-CIRCUIT (FIRST)
+            # -------------------------------
+            tier = detect_tier_query(q)
+            if tier:
+                yield {
+                    "event": "message",
+                    "data": f"🎓 **Tier {tier} Universities (FES Partner Universities – UK)**\n\n"
+                }
+
+                for uni, fee in TIERS[tier]:
+                    line = f"• {uni}"
+                    if fee:
+                        line += f" — {fee}"
+                    yield {"event": "message", "data": line + "\n"}
+                    await asyncio.sleep(0)
+
+                yield {
+                    "event": "message",
+                    "data": "\n👉 *FES can guide you end-to-end.*"
+                }
+                yield {"event": "message", "data": "[DONE]"}
+                return
+
+            # -------------------------------
+            # 🔍 NORMAL RAG FLOW (UNCHANGED)
+            # -------------------------------
             matches = run_rag(q, top_k=3)
 
             if not matches:
@@ -311,30 +423,35 @@ async def stream(q: str):
                 yield {"event": "message", "data": "[DONE]"}
                 return
 
-            # 2) Immediate fast path for contact queries
             if is_contact_query(q):
                 fast = fast_contact_response(matches, q)
                 if fast:
                     yield {"event": "message", "data": fast}
-                    yield {"event": "message", "data": f"[Retrieved {len(matches)} chunks | Response time: {time.time()-start:.2f}s]"}
+                    yield {
+                        "event": "message",
+                        "data": f"[Retrieved {len(matches)} chunks | Response time: {time.time()-start:.2f}s]"
+                    }
                     yield {"event": "message", "data": "[DONE]"}
                     return
 
-            # 3) Build context and stream GPT answer
             context = build_context(matches)
 
             for token in generate_answer_stream(q, context):
                 yield {"event": "message", "data": token}
-                # give control back to the loop to flush quickly
                 await asyncio.sleep(0)
 
-            yield {"event": "message", "data": f"\n\n[Retrieved {len(matches)} chunks | Response time: {time.time()-start:.2f}s]"}
+            yield {
+                "event": "message",
+                "data": f"\n\n[Retrieved {len(matches)} chunks | Response time: {time.time()-start:.2f}s]"
+            }
             yield {"event": "message", "data": "[DONE]"}
 
         except Exception as e:
             logging.exception("Error in /stream")
-            # Send a friendly message instead of killing the stream
-            yield {"event": "message", "data": f"⚠️ Something went wrong while answering.\n\nDetails: {str(e)}"}
+            yield {
+                "event": "message",
+                "data": f"⚠️ Something went wrong while answering.\n\nDetails: {str(e)}"
+            }
             yield {"event": "message", "data": "[DONE]"}
 
     return EventSourceResponse(event_generator())
