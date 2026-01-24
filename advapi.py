@@ -101,13 +101,44 @@ TIERS = {
 }
 def detect_tier_query(query: str):
     q = query.lower()
-    if "tier 1" in q:
-        return 1
-    if "tier 2" in q:
-        return 2
-    if "tier 3" in q:
-        return 3
-    return None
+
+    # -----------------------------
+    # 1️⃣ Detect tier number
+    # -----------------------------
+    tier = None
+    if "tier 1" in q or "tier1" in q:
+        tier = 1
+    elif "tier 2" in q or "tier2" in q:
+        tier = 2
+    elif "tier 3" in q or "tier3" in q:
+        tier = 3
+
+    if not tier:
+        return None
+
+    # -----------------------------
+    # 2️⃣ Must be a LISTING request
+    # -----------------------------
+    list_keywords = [
+        "universities", "unis", "list", "show", "give",
+        "which universities", "universities in", "fes universities"
+    ]
+
+    if not any(k in q for k in list_keywords):
+        return None
+
+    # -----------------------------
+    # 3️⃣ Negation handling
+    # -----------------------------
+    negations = [
+        "not tier", "except tier", "other than tier",
+        "exclude tier", "without tier"
+    ]
+
+    if any(n in q for n in negations):
+        return None
+
+    return tier
 
 def embed_query(query: str):
     if query in EMBED_CACHE:
